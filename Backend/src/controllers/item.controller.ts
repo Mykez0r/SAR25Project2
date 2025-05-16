@@ -5,18 +5,47 @@ import Item from '../models/item';
  * Create a new item
  * Note: original dummy functionality
  */
-export const createItem = (req: Request, res: Response): void => {
+export const createItem = async (req: Request, res: Response): Promise <void> => {
   console.log("NewItem -> received form submission new item");
   console.log(req.body);
-  
-  // Send dummy response as in the original code
-  res.json({
-    description: "somedescription",
-    currentbid: "somecurrentbid",
-    remainingtime: "someremainingtime",
-    wininguser: "somewininguser"
-  });
-};
+
+  const {id, description, currentbid, remainingtime, buynow, wininguser, sold, owner } = req.body;
+  if (!id || !description || currentbid === undefined || remainingtime === undefined) {
+    res.status(400).json({ message: 'Missing required fields' });
+    return;
+  }
+
+  try{
+
+    const newItem = new Item({
+      id,
+      description,
+      currentbid,
+      remainingtime,
+      buynow,
+      wininguser,
+      sold,
+      owner
+    });
+
+    const savedItem = await newItem.save();
+    //Respond with created item
+    res.status(201).json({
+      id: savedItem.id,
+      description: savedItem.description,
+      currentbid: savedItem.currentbid,
+      remainingtime: savedItem.remainingtime,
+      buynow: savedItem.buynow,
+      winninguser: savedItem.wininguser,
+      sold: savedItem.sold,
+      owner: savedItem.owner
+    });
+      } catch (error) {
+    console.error('Error registering Item:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+
+  }
 
 /**
  * Remove an existing item
