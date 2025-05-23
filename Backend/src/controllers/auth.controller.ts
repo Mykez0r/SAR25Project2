@@ -7,21 +7,43 @@ import config from '../config/config';
  * Handle user authentication
  * Note: Original dummy functionality
  */
-export const authenticate = (req: Request, res: Response): void => {
+export const authenticate = async (req: Request, res: Response): Promise<void> => {
   console.log('Authenticate -> Received Authentication POST');
-  
-  // Generate JWT token youshould use a real user authentication here check in the database
-  User.findOne({ username: req.body.username })
-  // For now, we are just signing the request body
-  const token = jwt.sign(req.body, config.jwtSecret);
-  
-  // Send response with token
-  res.json({
-    username: req.body.username,
-    token
-  });
-  
-  console.log('Authenticate -> Received Authentication POST');
+
+  const { username, password } = req.body;
+
+  // Manual validation
+  if (!username || !password) {
+    res.status(400).json({ message: 'Username and password are required.' });
+    return;
+  }
+
+  try {
+    // Find user by username
+    const user = await User.findOne({ username });
+    if (!user) {
+      res.status(401).json({ message: 'Invalid username or password.' });
+      return;
+    }
+
+    // In production, use hashed passwords and compare with bcrypt
+    if (user.password !== password) {
+      res.status(401).json({ message: 'Invalid username or password.' });
+      return;
+    }
+
+    // Generate JWT token
+    const token = jwt.sign({ id: user._id, username: user.username }, config.jwtSecret);
+
+    res.json({
+      username: user.username,
+      token
+    });
+    console.log('Authenticate -> Authentication successful');
+  } catch (error) {
+    console.error('Error during authentication:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 };
 
 /**
