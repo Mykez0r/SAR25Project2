@@ -15,14 +15,13 @@ class SocketService {
    */
   public init(io: Server): void {
     this.io = io;
-    
+
     // JWT authentication for socket.io
     io.use((socket: Socket, next) => {
-      // Check for token in query or auth object (supporting both methods)
-      const token = 
-        socket.handshake.query?.token as string || 
+      const token =
+        (socket.handshake.query?.token as string) ||
         (socket.handshake.auth as any)?.token;
-        
+
       if (token) {
         jwt.verify(token, config.jwtSecret, (err: jwt.VerifyErrors | null, decoded: any) => {
           if (err) {
@@ -52,33 +51,52 @@ class SocketService {
     this.io.on('connection', (socket: Socket) => {
       const username = socket.data.decoded_token.username;
       console.log(`${username} user connected`);
-      
+
       // Store client in the maps
       this.socketIDbyUsername.set(username, socket.id);
       this.usernamebySocketID.set(socket.id, username);
 
       // Handle new user event
-      socket.on('newUser:username', (data) => {
-        console.log("newUser:username -> New user event received: ", data);
+      socket.on('newUser:username', async (usernameFromClient: string) => {
+        try {
+          // Mark user as online in DB
+          await User.findOneAndUpdate({ username: usernameFromClient }, { online: true });
+
+          // Update socket maps
+          this.socketIDbyUsername.set(usernameFromClient, socket.id);
+          this.usernamebySocketID.set(socket.id, usernameFromClient);
+
+          // Broadcast to all clients about the new logged-in user
+          const user = await User.findOne({ username: usernameFromClient });
+          if (user) {
+            this.newLoggedUserBroadcast({
+              _id: user._id,
+              username: user.username,
+              name: user.name,
+            });
+          }
+        } catch (err) {
+          console.error('Error handling newUser:username:', err);
+        }
       });
 
       // Handle bid event
-      socket.on('send:bid', (data) => {
-        console.log("send:bid -> Received event send:bid with data = ", data);
-        // Original dummy functionality 
-      });
-
-      // Handle message event
-      socket.on('send:message', (chat) => {
-        console.log("send:message received with -> ", chat);
+      socket.on('send:bid', async (bidData) => {
+        console.log("send:bid -> Received event send:bid with data = ", bidData);
+        // Example: update item bid in DB, then broadcast items update
+        // await Item.findByIdAndUpdate(bidData.itemId, { currentbid: bidData.amount, wininguser: username });
+        // Optionally, check if item is sold and emit 'item:sold'
       });
 
       // Handle disconnection
-      socket.on('disconnect', () => {
+      socket.on('disconnect', async () => {
         console.log("User disconnected");
         const username = this.usernamebySocketID.get(socket.id);
         if (username) {
           this.socketIDbyUsername.delete(username);
+          // Mark user as offline in DB
+          await User.findOneAndUpdate({ username }, { online: false });
+          this.userLoggedOutBroadcast({ username });
         }
         this.usernamebySocketID.delete(socket.id);
       });
@@ -89,10 +107,23 @@ class SocketService {
    * Start auction timer for item remaining time updates
    */
   private startAuctionTimer(): void {
-    // Timer function to decrement remaining time 
-    this.intervalId = setInterval(() => {
-      //  update item times here
-      // add actual database operations
+    this.intervalId = setInterval(async () => {
+      try {
+        // Fetch all items and emit to all clients
+        const items = await Item.find({}, { __v: 0 });
+        if (this.io) {
+          this.io.emit('items:update', items);
+        }
+        // Optionally, check for sold items and emit 'item:sold'
+        // Example:
+        // items.forEach(item => {
+        //   if (item.sold) {
+        //     this.io?.emit('item:sold', item);
+        //   }
+        // });
+      } catch (err) {
+        console.error('Error in auction timer:', err);
+      }
     }, 1000);
   }
 
@@ -101,9 +132,7 @@ class SocketService {
    */
   public newLoggedUserBroadcast(newUser: any): void {
     if (this.io) {
-      for (const socketID of this.socketIDbyUsername.values()) {
-        this.io.to(socketID).emit('new:item', newUser);
-      }
+      this.io.emit('new:user', newUser);
     }
   }
 
@@ -111,11 +140,17 @@ class SocketService {
    * Broadcast user logged-out event to all clients
    */
   public userLoggedOutBroadcast(loggedOutUser: any): void {
-    console.log('RemoveItemBroadcast -> ', loggedOutUser);
     if (this.io) {
-      for (const socketID of this.socketIDbyUsername.values()) {
-        this.io.to(socketID).emit('remove:item', loggedOutUser);
-      }
+      this.io.emit('user:loggedOut', loggedOutUser);
+    }
+  }
+
+  /**
+   * Broadcast item sold event to all clients
+   */
+  public itemSoldBroadcast(item: any): void {
+    if (this.io) {
+      this.io.emit('item:sold', item);
     }
   }
 

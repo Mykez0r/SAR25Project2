@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import * as jwt from 'jsonwebtoken';
 import User from '../models/user';
 import config from '../config/config';
+import socketService from '../services/socket.service';
 
 /**
  * Handle user authentication
@@ -35,6 +36,16 @@ export const authenticate = async (req: Request, res: Response): Promise<void> =
     // Generate JWT token
     const token = jwt.sign({ id: user._id, username: user.username }, config.jwtSecret);
 
+    // Optionally update user status
+    await User.findOneAndUpdate({ username }, { online: true });
+
+    // Broadcast new login
+    socketService.newLoggedUserBroadcast({
+      _id: user._id,
+      username: user.username,
+      name: user.name,
+    });
+
     res.json({
       username: user.username,
       token
@@ -54,7 +65,6 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
   console.log("NewUser -> received form submission new user");
   console.log(req.body);
 
-  // Manual validation (since express-validator is not used)
   const { name, email, username, password, latitude, longitude } = req.body;
   if (!name || !email || !username || !password) {
     res.status(400).json({ message: 'Missing required fields' });
@@ -62,26 +72,31 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
   }
 
   try {
-    // Check if user already exists
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
       res.status(409).json({ message: 'User with this email or username already exists.' });
       return;
     }
 
-    // TODO: Hash password before saving in production!
     const newUser = new User({
       name,
       email,
       username,
       password,
       latitude,
-      longitude
+      longitude,
+      online: true // Add an 'online' field to your User schema if not present
     });
 
     const savedUser = await newUser.save();
 
-    // Respond with created user (omit password)
+    // Broadcast new user to all clients
+    socketService.newLoggedUserBroadcast({
+      _id: savedUser._id,
+      username: savedUser.username,
+      name: savedUser.name,
+    });
+
     res.status(201).json({
       _id: savedUser._id,
       name: savedUser.name,
@@ -102,7 +117,6 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
  */
 export const getUsers = async (req: Request, res: Response): Promise<void> => {
   try {
-    // Fetch all users from the database, omitting passwords for security
     const users = await User.find({}, { password: 0 });
     res.status(200).json(users);
   } catch (error) {
