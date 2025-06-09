@@ -3,6 +3,7 @@ import * as jwt from 'jsonwebtoken';
 import User from '../models/user';
 import config from '../config/config';
 import socketService from '../services/socket.service';
+import user from '../models/user';
 
 /**
  * Handle user authentication
@@ -89,6 +90,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
     });
 
     const savedUser = await newUser.save();
+    user.create(savedUser);
 
     // Broadcast new user to all clients
     socketService.newLoggedUserBroadcast({

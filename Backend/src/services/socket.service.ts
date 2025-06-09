@@ -3,6 +3,7 @@ import * as jwt from 'jsonwebtoken';
 import config from '../config/config';
 import User from '../models/user';
 import Item from '../models/item';
+import { removeItem } from '../controllers/item.controller';
 
 class SocketService {
   private io: Server | null = null;
@@ -57,24 +58,20 @@ class SocketService {
       this.usernamebySocketID.set(socket.id, username);
 
       // Handle new user event
-      socket.on('newUser:username', async (usernameFromClient: string) => {
+      socket.on('newUser:username', async (data: any) => {
         try {
+          // Accept both string and object for flexibility
+          const usernameFromClient = typeof data === 'string' ? data : data.username;
+
           // Mark user as online in DB
-          await User.findOneAndUpdate({ username: usernameFromClient }, { online: true });
+          await User.findOneAndUpdate({ usernameFromClient }, { online: true });
 
           // Update socket maps
           this.socketIDbyUsername.set(usernameFromClient, socket.id);
           this.usernamebySocketID.set(socket.id, usernameFromClient);
 
           // Broadcast to all clients about the new logged-in user
-          const user = await User.findOne({ username: usernameFromClient });
-          if (user) {
-            this.newLoggedUserBroadcast({
-              _id: user._id,
-              username: user.username,
-              name: user.name,
-            });
-          }
+          this.newLoggedUserBroadcast(usernameFromClient);
         } catch (err) {
           console.error('Error handling newUser:username:', err);
         }
@@ -82,21 +79,70 @@ class SocketService {
 
       // Handle bid event
       socket.on('send:bid', async (bidData) => {
-        console.log("send:bid -> Received event send:bid with data = ", bidData);
-        // Example: update item bid in DB, then broadcast items update
-        // await Item.findByIdAndUpdate(bidData.itemId, { currentbid: bidData.amount, wininguser: username });
-        // Optionally, check if item is sold and emit 'item:sold'
+        try {
+          const { description, amount, username } = bidData;
+          // Find the item by description
+          const item = await Item.findOne({ description });
+          
+          if (!item || item.sold) return;
+          
+          // Buy now integration
+          if (amount >= item.buynow) {
+            item.sold = true;
+            item.wininguser = username;
+            console.log(`Item "${description}" bought now by ${username} for ${amount}`);
+            this.itemSoldBroadcast(item);
+            await Item.deleteOne({ description: item.description });
+            // Instantly broadcast updated items list
+            const updatedItems = await Item.find({}, { __v: 0 });
+            if (this.io) {
+              this.io.emit('items:update', updatedItems);
+            }
+            return;
+          }
+          // Validate bid
+          if (amount > item.currentbid) {
+            item.currentbid = amount;
+            item.wininguser = username;
+            await item.save();
+            console.log(`Bid accepted for item "${description}" by ${username} with amount ${amount}`);
+            // Instantly broadcast updated items list
+            const updatedItems = await Item.find({}, { __v: 0 });
+            if(this.io) {
+              this.io.emit('items:update', updatedItems);
+            }
+          }
+        } catch (err) {
+          console.error('Error handling send:bid:', err);
+        }
+      });
+
+      // Handle remove:item event
+      socket.on('remove:item', async (data: any) => {
+        try {
+          const { description } = data;
+          if (!description) return;
+          await Item.deleteOne({ description });
+          this.itemRemovedBroadcast({ description });
+          // Instantly broadcast updated items list
+          const updatedItems = await Item.find({}, { __v: 0 });
+          if (this.io) {
+            this.io.emit('items:update', updatedItems);
+          }
+        } catch (err) {
+          console.error('Error handling remove:item:', err);
+        }
       });
 
       // Handle disconnection
       socket.on('disconnect', async () => {
-        console.log("User disconnected");
         const username = this.usernamebySocketID.get(socket.id);
         if (username) {
           this.socketIDbyUsername.delete(username);
           // Mark user as offline in DB
           await User.findOneAndUpdate({ username }, { online: false });
           this.userLoggedOutBroadcast({ username });
+          console.log(`${username} user disconnected`);
         }
         this.usernamebySocketID.delete(socket.id);
       });
@@ -109,22 +155,29 @@ class SocketService {
   private startAuctionTimer(): void {
     this.intervalId = setInterval(async () => {
       try {
-        // Fetch all items and emit to all clients
+        // Fetch all items from the database
         const items = await Item.find({}, { __v: 0 });
-        if (this.io) {
-          this.io.emit('items:update', items);
+
+        // Decrement remainingtime for each item if it's greater than 0
+        for (const item of items) {
+          if (item.remainingtime > 0) {
+            item.remainingtime -= 1;
+
+            if (item.remainingtime === 0 && !item.sold) {
+              item.sold = true;
+              this.itemSoldBroadcast(item);
+              await Item.deleteOne({ description: item.description }); // Remove by description
+              continue; // Skip saving since it's deleted
+            }
+
+            await item.save();
+          }
         }
-        // Optionally, check for sold items and emit 'item:sold'
-        // Example:
-        // items.forEach(item => {
-        //   if (item.sold) {
-        //     this.io?.emit('item:sold', item);
-        //   }
-        // });
+
       } catch (err) {
         console.error('Error in auction timer:', err);
       }
-    }, 1000);
+    }, 1000); // 1000 ms = 1 second
   }
 
   /**
@@ -153,6 +206,12 @@ class SocketService {
       this.io.emit('item:sold', item);
     }
   }
+
+    public itemRemovedBroadcast(item: any): void {
+      if (this.io) {
+        this.io.emit('remove:item', item);
+      }
+    }
 
   /**
    * Clean up resources

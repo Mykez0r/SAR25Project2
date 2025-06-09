@@ -73,4 +73,59 @@ export class SocketService {
       });
     });
   }
+
+  /**
+   * Notify the server that a new user has signed in
+   */
+  sendNewUser(username: string) {
+    this.sendEvent('newUser:username', username);
+  }
+
+  /**
+   * Send a buy now event to the server
+   */
+  buyNow(description: string, username: string) {
+    this.sendEvent('buy:now', { description, username });
+  }
+
+  /**
+   * Send a bid for an item
+   */
+  sendBid(bidData: any) {
+    this.sendEvent('send:bid', bidData);
+  }
+
+  removeItem(description: string) {
+  this.sendEvent('remove:item', { description });
+  }
+
+  /**
+   * After user logs in
+   */
+  onUserLogin(userName: string) {
+    this.sendNewUser(userName);
+  }
+
+  /**
+   * When user places a bid
+   */
+  onPlaceBid(description: string, bidAmount: number, userName: string) {
+    this.sendBid({ description, amount: bidAmount, username: userName });
+  }
+
+  /**
+   * Notify the server that a user has logged out
+   */
+  sendUserLoggedOut(username: string) {
+    this.sendEvent('user:loggedOut', username);
+  }
+
+  /**
+   * After user logs out
+   */
+  onUserLogout(userName: string) {
+    this.sendUserLoggedOut(userName);
+  }
+
+  
 }

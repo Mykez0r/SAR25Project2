@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import Item from '../models/item';
+import item from '../models/item';
 
 /**
  * Create a new item
@@ -28,6 +29,7 @@ export const createItem = async (req: Request, res: Response): Promise <void> =>
     });
 
     const savedItem = await newItem.save();
+    item.create(savedItem);
     //Respond with created item
     res.status(201).json({
       description: savedItem.description,
@@ -49,12 +51,30 @@ export const createItem = async (req: Request, res: Response): Promise <void> =>
  * Remove an existing item
  * Note: original dummy functionality
  */
-export const removeItem = (req: Request, res: Response): void => {
+export const removeItem = async (req: Request, res: Response): Promise<void> => {
   console.log("RemoveItem -> received form submission remove item");
   console.log(req.body);
-  
-  // No response was sent in the original code
-  res.status(200).end();
+
+  const { description } = req.body;
+  if (!description) {
+    res.status(400).json({ message: 'Missing required field: description' });
+    return;
+  }
+
+  try {
+    // Remove the item by description (ensure description is unique in your schema)
+    const result = await Item.deleteOne({ description });
+
+    if (result.deletedCount === 0) {
+      res.status(404).json({ message: 'Item not found' });
+      return;
+    }
+
+    res.status(200).json({ message: `Item "${description}" removed successfully.` });
+  } catch (error) {
+    console.error('Error removing item:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
 };
 
 /**
